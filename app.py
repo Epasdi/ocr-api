@@ -3,27 +3,23 @@ from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
-from redis import Redis
 from rq import Queue
+from redis_conn import redis_connection  # <-- nuevo
 
-# ---- Carga variables de entorno ----
 load_dotenv()
 
-# ---- Configuración base ----
 APP_PORT = int(os.getenv("PORT", "8088"))
 QUAR_DIR = Path(os.getenv("QUAR_DIR", "/srv/quarantine"))
 QUAR_DIR.mkdir(parents=True, exist_ok=True)
 
-# REDIS_URL con formato sin usuario (password solamente)
-REDIS_URL = os.getenv("REDIS_URL", "redis://:ertoken@swk4ssw4ogsoc0sccgs0occg:6379/0")
-redis = Redis.from_url(REDIS_URL)
+# Conexión robusta a Redis
+redis = redis_connection()
 q = Queue("ocr", connection=redis)
 
 MAX_UPLOAD = int(float(os.getenv("MAX_UPLOAD_MB", "25")) * 1024 * 1024)
 
 app = FastAPI()
 
-# ---------- Healthcheck: SIEMPRE 200 ----------
 @app.get("/health")
 def health():
     status = {"ok": True}
@@ -34,7 +30,6 @@ def health():
         status["redis"] = f"error:{e.__class__.__name__}"
     return JSONResponse(status, status_code=200)
 
-# ---------- Ingesta ----------
 @app.post("/ingest")
 async def ingest(
     file: UploadFile = File(...),
@@ -50,14 +45,11 @@ async def ingest(
                 break
             size += len(chunk)
             if size > MAX_UPLOAD:
-                try:
-                    tmp.unlink()
-                except:
-                    pass
+                try: tmp.unlink()
+                except: pass
                 raise HTTPException(413, detail="Archivo demasiado grande")
             f.write(chunk)
 
-    # Encola trabajo en el worker (ajusta el import path si tu módulo difiere)
     job = q.enqueue("ocr_task.process_document", str(tmp), job_timeout=600)
 
     deadline = time.time() + 25
@@ -71,7 +63,6 @@ async def ingest(
 
     return {"pending": True, "job_id": job.id}
 
-# ---------- Polling del resultado ----------
 @app.get("/result/{job_id}")
 def result(job_id: str):
     from rq.job import Job
