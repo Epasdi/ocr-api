@@ -1,6 +1,6 @@
 fastapi
 uvicorn[standard]
 python-multipart
-redis
-rq
 python-dotenv
+redis>=5.0.0
+rq>=1.15.0
